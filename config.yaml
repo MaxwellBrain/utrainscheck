@@ -36,13 +36,22 @@ gemini:
   # Modèles essayés dans l'ordre. On passe au suivant si l'un est inconnu
   # (404), surchargé (503) ou au quota (429). La variable d'environnement
   # GEMINI_MODEL, si elle existe, est essayée en premier.
+  # Liste établie à partir des modèles réellement accessibles avec la clé
+  # (ListModels). Pour la mettre à jour : le message d'erreur du bot affiche
+  # la liste courante quand aucun modèle ne répond.
   models:
-    - gemini-3.8-flash
-    - gemini-flash-latest
-    - gemini-3.8-flash-lite
+    - gemini-3.8-flash # flash courant, le meilleur rapport qualité/coût ici
+    - gemini-flash-latest # alias vers le dernier flash disponible
+    - gemini-3-flash-preview
+    - gemini-2.5-flash-lite
+    - gemini-flash-lite-latest
+    - gemini-pro-latest # dernier recours : plus lent et plus cher
   temperature: 0.2
   # Nombre de séries complètes sur la liste de modèles, avec pause entre deux.
   max_attempts: 3
+  # Délai maximal d'une requête (secondes). Le SDK ne retente pas lui-même :
+  # les reprises sont gérées par le bot, modèle par modèle.
+  request_timeout_s: 90
 
 discord:
   # Nom affiché comme auteur des messages (surcharge le nom du webhook).

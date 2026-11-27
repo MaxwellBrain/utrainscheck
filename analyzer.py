@@ -194,6 +194,27 @@ def _render_articles(articles: Sequence[Article]) -> str:
     return "\n\n".join(blocks)
 
 
+def _build_client(api_key: str, gemini_config: dict[str, Any]) -> genai.Client:
+    """Client Gemini borné dans le temps, sans retry interne.
+
+    Le SDK retente lui-même par défaut, ce qui peut immobiliser deux minutes
+    sur un modèle surchargé. On lui coupe ce retry : la reprise est gérée ici,
+    modèle par modèle, ce qui est à la fois plus rapide et plus lisible.
+    """
+    timeout_ms = int(gemini_config.get("request_timeout_s", 90)) * 1000
+    try:
+        return genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=timeout_ms,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
+    except Exception as exc:  # SDK plus ancien : on repart sur le client par défaut
+        log.warning("Options HTTP non supportées par le SDK (%s) — client par défaut", exc)
+        return genai.Client(api_key=api_key)
+
+
 def _generate(
     client: genai.Client,
     model: str,
@@ -288,7 +309,7 @@ def _call_gemini(
         if len(discarded) == len(models):
             break
         if series < attempts:
-            delay = min(60.0, 10.0 * series)
+            delay = min(60.0, 20.0 * series)
             log.warning(
                 "Aucun modèle n'a répondu (série %d/%d) — nouvelle série dans %.0fs",
                 series,
@@ -327,7 +348,7 @@ def analyze(
 
     gemini_config = config["gemini"]
     models = resolve_models(config)
-    client = genai.Client(api_key=key)
+    client = _build_client(key, gemini_config)
     prompt = PROMPT_TEMPLATE.format(count=len(articles), articles=_render_articles(articles))
 
     log.info("Analyse de %d articles — modèles essayés : %s", len(articles), ", ".join(models))
