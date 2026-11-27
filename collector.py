@@ -99,16 +99,21 @@ def retry_call(
     base_delay: float = 2.0,
     max_delay: float = 30.0,
     exceptions: tuple[type[BaseException], ...] = (Exception,),
+    fatal: tuple[type[BaseException], ...] = (),
     label: str = "appel",
 ) -> T:
     """Exécute `func` avec un retry exponentiel et un jitter.
 
     Utilisé pour les flux, l'API Gemini et le webhook Discord.
+    Les exceptions listées dans `fatal` remontent immédiatement : inutile de
+    réessayer une requête que le serveur refusera à l'identique.
     """
     last_error: BaseException | None = None
     for attempt in range(1, attempts + 1):
         try:
             return func()
+        except fatal:  # erreur définitive : on ne perd pas de temps en retries
+            raise
         except exceptions as exc:  # noqa: PERF203 - on veut le retry par tentative
             last_error = exc
             if attempt == attempts:

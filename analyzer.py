@@ -14,11 +14,16 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from collector import Article, retry_call
 
 log = logging.getLogger(__name__)
+
+
+class PermanentGeminiError(RuntimeError):
+    """Erreur Gemini définitive : réessayer donnerait le même résultat."""
 
 #: Clés renvoyées par Gemini -> libellé affiché dans Discord.
 #: On fait choisir une clé simple au modèle, puis le code met l'emoji :
@@ -158,7 +163,7 @@ RESPONSE_SCHEMA = types.Schema(
 def resolve_model(config: dict[str, Any]) -> str:
     """Modèle Gemini : variable d'environnement sinon valeur de config.yaml."""
     env_model = (os.environ.get("GEMINI_MODEL") or "").strip()
-    return env_model or str(config["gemini"].get("default_model", "gemini-2.5-flash"))
+    return env_model or str(config["gemini"].get("default_model", "gemini-3.8-flash"))
 
 
 def _render_articles(articles: Sequence[Article]) -> str:
@@ -184,16 +189,28 @@ def _call_gemini(
     """Appelle Gemini en JSON strict, avec retry/backoff, et renvoie le dict."""
 
     def _do() -> dict[str, Any]:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=temperature,
-                response_mime_type="application/json",
-                response_schema=RESPONSE_SCHEMA,
-            ),
-        )
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=temperature,
+                    response_mime_type="application/json",
+                    response_schema=RESPONSE_SCHEMA,
+                ),
+            )
+        except genai_errors.ClientError as exc:
+            status = getattr(exc, "code", None)
+            if status == 429:  # quota : le retry a du sens
+                raise
+            hint = ""
+            if status == 404:
+                hint = (
+                    f" — le modèle « {model} » n'existe pas ou n'est plus accessible ; "
+                    "ajuste gemini.default_model dans config.yaml ou le secret GEMINI_MODEL"
+                )
+            raise PermanentGeminiError(f"Gemini a refusé la requête ({status}){hint} : {exc}")
         raw = (response.text or "").strip()
         if not raw:
             raise ValueError("réponse Gemini vide")
@@ -207,6 +224,7 @@ def _call_gemini(
         attempts=attempts,
         base_delay=3.0,
         max_delay=45.0,
+        fatal=(PermanentGeminiError,),
         label="Gemini",
     )
 

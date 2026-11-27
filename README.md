@@ -63,7 +63,7 @@ Dépôt → **Settings** → **Secrets and variables** → **Actions** → **New
 | --- | --- | --- |
 | `GEMINI_API_KEY` | oui | la clé Google AI Studio |
 | `DISCORD_WEBHOOK_URL` | oui | l'URL du webhook Discord |
-| `GEMINI_MODEL` | non | `gemini-2.5-flash` par défaut |
+| `GEMINI_MODEL` | non | `gemini-3.8-flash` par défaut |
 
 ## Lancer un test
 

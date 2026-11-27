@@ -34,7 +34,7 @@ general:
 
 gemini:
   # Modèle par défaut si la variable d'environnement GEMINI_MODEL est absente.
-  default_model: gemini-2.5-flash
+  default_model: gemini-3.8-flash
   temperature: 0.2
   max_attempts: 4
 
