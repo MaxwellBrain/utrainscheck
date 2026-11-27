@@ -1,0 +1,6 @@
+feedparser>=6.0.11,<7
+requests>=2.32,<3
+google-genai>=1.0,<2
+PyYAML>=6.0,<7
+# Base de fuseaux horaires : indispensable pour zoneinfo sous Windows.
+tzdata>=2024.1; platform_system == "Windows"

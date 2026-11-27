@@ -1,0 +1,312 @@
+# ---------------------------------------------------------------------------
+# Utrains Pulse — configuration
+# Ce fichier se modifie sans toucher au code : sources, mots-clés, seuils.
+# ---------------------------------------------------------------------------
+
+general:
+  # Fuseau utilisé pour la date affichée dans le message.
+  timezone: America/Chicago
+  # Fenêtre par défaut quand aucune exécution précédente n'est connue (heures).
+  lookback_hours: 24
+  # Garde-fou : on ne remonte jamais plus loin, même après plusieurs échecs.
+  max_lookback_hours: 72
+  # Nombre de sujets publiés au maximum.
+  max_topics: 10
+  # Importance minimale (1 à 5) pour qu'un sujet soit publié.
+  min_importance: 3
+  # Taille max du contenu envoyé à Gemini, par article (caractères).
+  max_article_chars: 2000
+  # Nombre max d'articles envoyés à Gemini (protection coût / contexte).
+  max_articles_to_analyze: 120
+  # Nombre max d'articles retenus par source (évite qu'un flux noie les autres).
+  max_articles_per_source: 25
+  # Anti-doublon : fichier d'état et durée de conservation.
+  state_file: sent.json
+  state_retention_days: 30
+  # Réseau
+  http_timeout: 20
+  feed_workers: 8
+  url_check_workers: 12
+  # Vérification que chaque URL répond bien 200 (HEAD puis GET).
+  verify_urls: true
+  # Filtrage par mots-clés appliqué par défaut aux sources généralistes.
+  filter_keywords_by_default: true
+
+gemini:
+  # Modèle par défaut si la variable d'environnement GEMINI_MODEL est absente.
+  default_model: gemini-2.5-flash
+  temperature: 0.2
+  max_attempts: 4
+
+chat:
+  # Limite de taille d'une requête Google Chat (32 Ko) avec une marge.
+  max_payload_bytes: 28000
+  max_attempts: 4
+
+# Mots-clés du périmètre. Un article issu d'une source généraliste doit en
+# contenir au moins un (titre ou résumé) pour être collecté.
+keywords:
+  include:
+    # DevOps / DevSecOps
+    - docker
+    - containerd
+    - kubernetes
+    - k8s
+    - kubectl
+    - helm
+    - argocd
+    - argo cd
+    - gitops
+    - terraform
+    - opentofu
+    - ansible
+    - pulumi
+    - github
+    - github actions
+    - gitlab
+    - gitlab ci
+    - jenkins
+    - ci/cd
+    - pipeline
+    - prometheus
+    - grafana
+    - loki
+    - opentelemetry
+    - observability
+    - observabilité
+    - vault
+    - trivy
+    - sonarqube
+    - sbom
+    - supply chain
+    - cve
+    - vulnerability
+    - vulnérabilité
+    - devsecops
+    - devops
+    - sre
+    - service mesh
+    - istio
+    - envoy
+    - runner
+    - registry
+    # Cloud
+    - aws
+    - eks
+    - ecs
+    - fargate
+    - lambda
+    - google cloud
+    - gke
+    - cloud run
+    - azure
+    - aks
+    - iam
+    - serverless
+    # LLMOps
+    - vllm
+    - ollama
+    - langchain
+    - langgraph
+    - llamaindex
+    - mcp
+    - model context protocol
+    - rag
+    - embedding
+    - vector database
+    - vector store
+    - pgvector
+    - qdrant
+    - weaviate
+    - milvus
+    - pinecone
+    - langfuse
+    - mlflow
+    - bedrock
+    - vertex ai
+    - azure ai foundry
+    - llm
+    - llmops
+    - inference
+    - fine-tuning
+    - gpu
+    - transformers
+
+# ---------------------------------------------------------------------------
+# Sources : uniquement des flux officiels RSS/Atom.
+#   name            : nom affiché dans le message
+#   url             : URL du flux
+#   domain          : DevOps | DevSecOps | Cloud | LLMOps
+#   enabled         : true / false
+#   filter_keywords : true pour les sources généralistes (défaut : general)
+#   official_for    : outils dont cette source est l'éditeur officiel.
+#                     Sert à afficher la source officielle en premier.
+# ---------------------------------------------------------------------------
+sources:
+  # --- Cloud ---------------------------------------------------------------
+  - name: AWS What's New
+    url: https://aws.amazon.com/about-aws/whats-new/recent/feed/
+    domain: Cloud
+    enabled: true
+    filter_keywords: true
+    official_for: [aws, eks, ecs, fargate, lambda, bedrock, cloudformation]
+
+  - name: Google Cloud Release Notes
+    url: https://cloud.google.com/feeds/gcp-release-notes.xml
+    domain: Cloud
+    enabled: true
+    filter_keywords: true
+    official_for: [google cloud, gcp, gke, cloud run, vertex ai]
+
+  - name: Azure Updates
+    url: https://www.microsoft.com/releasecommunications/api/v2/azure/rss
+    domain: Cloud
+    enabled: true
+    filter_keywords: true
+    official_for: [azure, aks, azure ai foundry, azure devops, entra]
+
+  # --- DevOps --------------------------------------------------------------
+  - name: Kubernetes Blog
+    url: https://kubernetes.io/feed.xml
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [kubernetes, k8s, kubectl]
+
+  - name: CNCF Blog
+    url: https://www.cncf.io/feed/
+    domain: DevOps
+    enabled: true
+    filter_keywords: true
+    official_for: [cncf, prometheus, opentelemetry, envoy, containerd, argo, helm]
+
+  - name: HashiCorp Blog
+    url: https://www.hashicorp.com/blog/feed.xml
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [terraform, vault, nomad, consul, packer, hashicorp]
+
+  - name: GitHub Changelog
+    url: https://github.blog/changelog/feed/
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [github, github actions, dependabot, codespaces]
+
+  - name: GitLab Blog
+    url: https://about.gitlab.com/atom.xml
+    domain: DevOps
+    enabled: true
+    filter_keywords: true
+    official_for: [gitlab, gitlab ci]
+
+  - name: Jenkins Blog
+    url: https://www.jenkins.io/rss.xml
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [jenkins]
+
+  - name: Docker Blog
+    url: https://www.docker.com/blog/feed/
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [docker, docker hub, docker compose, buildx]
+
+  # --- DevSecOps -----------------------------------------------------------
+  # Le flux KEV historique (known_exploited_vulnerabilities.xml) n'existe plus ;
+  # les ajouts au catalogue KEV sont publiés dans les alertes CISA.
+  - name: CISA Alerts (KEV)
+    url: https://www.cisa.gov/cybersecurity-advisories/all.xml
+    domain: DevSecOps
+    enabled: true
+    filter_keywords: false
+    official_for: [cve, kev, cisa]
+
+  # --- LLMOps --------------------------------------------------------------
+  - name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
+    domain: LLMOps
+    enabled: true
+    filter_keywords: true
+    official_for: [hugging face, transformers, text generation inference]
+
+  - name: LangChain Blog
+    url: https://www.langchain.com/blog/rss.xml
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [langchain, langgraph, langsmith]
+
+  # --- Releases GitHub (flux Atom officiels des projets) -------------------
+  - name: GitHub Releases — kubernetes
+    url: https://github.com/kubernetes/kubernetes/releases.atom
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [kubernetes, k8s]
+
+  - name: GitHub Releases — terraform
+    url: https://github.com/hashicorp/terraform/releases.atom
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [terraform]
+
+  - name: GitHub Releases — opentofu
+    url: https://github.com/opentofu/opentofu/releases.atom
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [opentofu]
+
+  - name: GitHub Releases — ansible
+    url: https://github.com/ansible/ansible/releases.atom
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [ansible]
+
+  - name: GitHub Releases — argo-cd
+    url: https://github.com/argoproj/argo-cd/releases.atom
+    domain: DevOps
+    enabled: true
+    filter_keywords: false
+    official_for: [argocd, argo cd, argo]
+
+  - name: GitHub Releases — vllm
+    url: https://github.com/vllm-project/vllm/releases.atom
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [vllm]
+
+  - name: GitHub Releases — ollama
+    url: https://github.com/ollama/ollama/releases.atom
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [ollama]
+
+  - name: GitHub Releases — langchain
+    url: https://github.com/langchain-ai/langchain/releases.atom
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [langchain, langgraph]
+
+  - name: GitHub Releases — langgraph
+    url: https://github.com/langchain-ai/langgraph/releases.atom
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [langgraph, langchain]
+
+  - name: GitHub Releases — mlflow
+    url: https://github.com/mlflow/mlflow/releases.atom
+    domain: LLMOps
+    enabled: true
+    filter_keywords: false
+    official_for: [mlflow]
