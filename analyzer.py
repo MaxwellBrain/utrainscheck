@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -17,7 +18,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from collector import Article, retry_call
+from collector import Article
 
 log = logging.getLogger(__name__)
 
@@ -160,10 +161,24 @@ RESPONSE_SCHEMA = types.Schema(
 # ---------------------------------------------------------------------------
 
 
-def resolve_model(config: dict[str, Any]) -> str:
-    """Modèle Gemini : variable d'environnement sinon valeur de config.yaml."""
-    env_model = (os.environ.get("GEMINI_MODEL") or "").strip()
-    return env_model or str(config["gemini"].get("default_model", "gemini-3.8-flash"))
+def resolve_models(config: dict[str, Any]) -> list[str]:
+    """Liste ordonnée des modèles à essayer.
+
+    GEMINI_MODEL (secret GitHub) passe en premier, puis les modèles de
+    config.yaml. Les doublons sont retirés en conservant l'ordre.
+    """
+    gemini_config = config.get("gemini", {})
+    candidates = [(os.environ.get("GEMINI_MODEL") or "").strip()]
+    candidates += [str(model).strip() for model in gemini_config.get("models") or []]
+    # Compatibilité avec l'ancienne clé default_model.
+    if gemini_config.get("default_model"):
+        candidates.append(str(gemini_config["default_model"]).strip())
+
+    ordered: list[str] = []
+    for model in candidates:
+        if model and model not in ordered:
+            ordered.append(model)
+    return ordered or ["gemini-3.8-flash"]
 
 
 def _render_articles(articles: Sequence[Article]) -> str:
@@ -179,53 +194,113 @@ def _render_articles(articles: Sequence[Article]) -> str:
     return "\n\n".join(blocks)
 
 
-def _call_gemini(
+def _generate(
     client: genai.Client,
     model: str,
     prompt: str,
     temperature: float,
-    attempts: int,
 ) -> dict[str, Any]:
-    """Appelle Gemini en JSON strict, avec retry/backoff, et renvoie le dict."""
+    """Un appel Gemini en JSON strict. Renvoie le dict ou lève.
 
-    def _do() -> dict[str, Any]:
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=temperature,
-                    response_mime_type="application/json",
-                    response_schema=RESPONSE_SCHEMA,
-                ),
-            )
-        except genai_errors.ClientError as exc:
-            status = getattr(exc, "code", None)
-            if status == 429:  # quota : le retry a du sens
-                raise
-            hint = ""
-            if status == 404:
-                hint = (
-                    f" — le modèle « {model} » n'existe pas ou n'est plus accessible ; "
-                    "ajuste gemini.default_model dans config.yaml ou le secret GEMINI_MODEL"
+    `PermanentGeminiError` signale un modèle à écarter définitivement (404,
+    clé refusée…). Les 429/503 remontent telles quelles : elles sont
+    rattrapables, sur un autre modèle ou plus tard.
+    """
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=temperature,
+                response_mime_type="application/json",
+                response_schema=RESPONSE_SCHEMA,
+            ),
+        )
+    except genai_errors.ClientError as exc:
+        status = getattr(exc, "code", None)
+        if status == 429:  # quota : réessayable
+            raise
+        hint = ""
+        if status == 404:
+            hint = f" — le modèle « {model} » n'existe pas ou n'est plus accessible"
+        raise PermanentGeminiError(f"Gemini a refusé la requête ({status}){hint} : {exc}")
+
+    raw = (response.text or "").strip()
+    if not raw:
+        raise ValueError("réponse Gemini vide")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("réponse Gemini inattendue (objet JSON attendu)")
+    return payload
+
+
+def _available_models(client: genai.Client, limit: int = 15) -> str:
+    """Modèles réellement accessibles avec cette clé, pour un message d'erreur utile."""
+    try:
+        names = [
+            str(model.name).removeprefix("models/")
+            for model in client.models.list()
+            if "generateContent" in (getattr(model, "supported_actions", None) or ["generateContent"])
+        ]
+    except Exception as exc:  # l'API peut aussi refuser le listing
+        return f"listing impossible ({exc})"
+    return ", ".join(names[:limit]) or "aucun"
+
+
+def _call_gemini(
+    client: genai.Client,
+    models: Sequence[str],
+    prompt: str,
+    temperature: float,
+    attempts: int,
+) -> tuple[str, dict[str, Any]]:
+    """Essaie les modèles dans l'ordre, sur plusieurs séries, avec backoff.
+
+    Un modèle inconnu est écarté pour de bon ; un modèle surchargé (503) ou au
+    quota (429) laisse sa place au suivant, puis sera retenté à la série
+    d'après. Renvoie le modèle qui a répondu et sa réponse.
+    """
+    discarded: set[str] = set()
+    last_error: BaseException | None = None
+
+    for series in range(1, max(1, attempts) + 1):
+        for model in models:
+            if model in discarded:
+                continue
+            try:
+                payload = _generate(client, model, prompt, temperature)
+                if series > 1 or model != models[0]:
+                    log.info("Modèle utilisé : %s (série %d)", model, series)
+                return model, payload
+            except PermanentGeminiError as exc:
+                log.error("%s", exc)
+                discarded.add(model)
+                last_error = exc
+            except Exception as exc:  # 429, 503, réponse illisible…
+                log.warning(
+                    "Modèle %s indisponible (%s) — essai du modèle suivant",
+                    model,
+                    str(exc)[:160],
                 )
-            raise PermanentGeminiError(f"Gemini a refusé la requête ({status}){hint} : {exc}")
-        raw = (response.text or "").strip()
-        if not raw:
-            raise ValueError("réponse Gemini vide")
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            raise ValueError("réponse Gemini inattendue (objet JSON attendu)")
-        return payload
+                last_error = exc
 
-    return retry_call(
-        _do,
-        attempts=attempts,
-        base_delay=3.0,
-        max_delay=45.0,
-        fatal=(PermanentGeminiError,),
-        label="Gemini",
+        if len(discarded) == len(models):
+            break
+        if series < attempts:
+            delay = min(60.0, 10.0 * series)
+            log.warning(
+                "Aucun modèle n'a répondu (série %d/%d) — nouvelle série dans %.0fs",
+                series,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(
+        f"Aucun modèle Gemini disponible parmi {', '.join(models)} "
+        f"(dernière erreur : {last_error}). "
+        f"Modèles accessibles avec cette clé : {_available_models(client)}"
     )
 
 
@@ -251,17 +326,17 @@ def analyze(
         raise RuntimeError("GEMINI_API_KEY manquant")
 
     gemini_config = config["gemini"]
-    model = resolve_model(config)
+    models = resolve_models(config)
     client = genai.Client(api_key=key)
     prompt = PROMPT_TEMPLATE.format(count=len(articles), articles=_render_articles(articles))
 
-    log.info("Analyse de %d articles avec le modèle %s", len(articles), model)
-    payload = _call_gemini(
+    log.info("Analyse de %d articles — modèles essayés : %s", len(articles), ", ".join(models))
+    model, payload = _call_gemini(
         client,
-        model=model,
+        models=models,
         prompt=prompt,
         temperature=float(gemini_config.get("temperature", 0.2)),
-        attempts=int(gemini_config.get("max_attempts", 4)),
+        attempts=int(gemini_config.get("max_attempts", 3)),
     )
 
     by_id = {article.id: article for article in articles}

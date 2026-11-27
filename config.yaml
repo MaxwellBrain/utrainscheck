@@ -33,10 +33,16 @@ general:
   filter_keywords_by_default: true
 
 gemini:
-  # Modèle par défaut si la variable d'environnement GEMINI_MODEL est absente.
-  default_model: gemini-3.8-flash
+  # Modèles essayés dans l'ordre. On passe au suivant si l'un est inconnu
+  # (404), surchargé (503) ou au quota (429). La variable d'environnement
+  # GEMINI_MODEL, si elle existe, est essayée en premier.
+  models:
+    - gemini-3.8-flash
+    - gemini-flash-latest
+    - gemini-3.8-flash-lite
   temperature: 0.2
-  max_attempts: 4
+  # Nombre de séries complètes sur la liste de modèles, avec pause entre deux.
+  max_attempts: 3
 
 discord:
   # Nom affiché comme auteur des messages (surcharge le nom du webhook).

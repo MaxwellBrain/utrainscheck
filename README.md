@@ -63,7 +63,7 @@ Dépôt → **Settings** → **Secrets and variables** → **Actions** → **New
 | --- | --- | --- |
 | `GEMINI_API_KEY` | oui | la clé Google AI Studio |
 | `DISCORD_WEBHOOK_URL` | oui | l'URL du webhook Discord |
-| `GEMINI_MODEL` | non | `gemini-3.8-flash` par défaut |
+| `GEMINI_MODEL` | non | modèle essayé en premier ; sinon la liste `gemini.models` de `config.yaml` |
 
 ## Lancer un test
 
@@ -125,6 +125,7 @@ Résumé en deux phrases.
 ## Fiabilité
 
 * Une source en panne n'interrompt pas la collecte : elle est listée en bas du message (`Sources indisponibles : …`).
+* Plusieurs modèles Gemini sont essayés dans l'ordre (`gemini.models`) : un modèle inconnu (404) est écarté, un modèle surchargé (503) ou au quota (429) laisse la place au suivant, puis une nouvelle série est tentée. Si aucun ne répond, le message d'erreur liste les modèles réellement accessibles avec la clé.
 * Retry avec backoff exponentiel et jitter sur les flux, l'API Gemini et le webhook ; le rate limit Discord (`429`) est respecté via `retry_after`.
 * Échec complet du script → message d'erreur court dans le salon ; échec plus en amont (dépendances, checkout) → message envoyé par l'étape `failure()` du workflow.
 * Anti-doublon : `sent.json` conserve 30 jours d'URL déjà envoyées et la date de la dernière exécution ; le workflow le commite après chaque envoi. Si le job n'a pas tourné pendant plusieurs jours, la fenêtre de rattrapage est plafonnée à `max_lookback_hours`.

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import notifier
-from analyzer import analyze, resolve_model, select_topics
+from analyzer import analyze, resolve_models, select_topics
 from collector import collect, load_config, normalize_url
 
 log = logging.getLogger("utrains_pulse")
@@ -160,7 +160,7 @@ def run(args: argparse.Namespace) -> int:
 
     # 2) Analyse Gemini (seulement s'il y a de la matière)
     if collected.articles:
-        log.info("Modèle Gemini : %s", resolve_model(config))
+        log.info("Modèles Gemini : %s", ", ".join(resolve_models(config)))
         topics = analyze(collected.articles, config)
     else:
         log.info("Aucun article nouveau : pas d'appel à Gemini")
