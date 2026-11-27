@@ -5,7 +5,7 @@ Chaque jour à **8h00 (America/Chicago)**, GitHub Actions lance un script Python
 
 1. collecte les actualités des dernières 24 h depuis des **flux officiels** (RSS/Atom),
 2. les fait trier, regrouper et résumer en français par l'**API Gemini**,
-3. publie une carte récapitulative dans un **espace Google Chat** via un webhook entrant.
+3. publie un récapitulatif dans un **salon Discord** via un webhook.
 
 Pas d'interface web, pas de base de données.
 
@@ -22,7 +22,7 @@ Pas d'interface web, pas de base de données.
 main.py                         orchestration, état (sent.json), CLI
 collector.py                    collecte des flux, nettoyage, vérification des URL
 analyzer.py                     appel Gemini (JSON strict) + sélection des sujets
-notifier.py                     construction et envoi de la carte Google Chat
+notifier.py                     construction et envoi du message Discord
 config.yaml                     sources, mots-clés, seuils (modifiable sans toucher au code)
 requirements.txt
 .env.example
@@ -38,14 +38,17 @@ pip install -r requirements.txt
 cp .env.example .env        # puis renseigner les deux valeurs
 ```
 
-### 1. Créer le webhook Google Chat
+### 1. Créer le webhook Discord
 
-1. Ouvrir l'espace Google Chat concerné (un espace, pas une discussion directe).
-2. Menu de l'espace → **Applications et intégrations** → **Webhooks** → **Ajouter un webhook**.
-3. Nom : `Utrains Pulse`, puis **Enregistrer**.
-4. Copier l'URL (`https://chat.googleapis.com/v1/spaces/.../messages?key=...&token=...`).
+1. Dans Discord, clic droit sur le **salon** qui recevra la veille → **Modifier le salon**.
+2. Onglet **Intégrations** → **Webhooks** → **Nouveau webhook**.
+3. Nommer le webhook (`Utrains Pulse`), choisir une image si besoin, puis **Copier l'URL du webhook**.
 
-> L'URL du webhook est un secret : elle permet d'écrire dans l'espace.
+L'URL ressemble à `https://discord.com/api/webhooks/123456789/AbCdEf...`.
+Il faut être administrateur du serveur, ou avoir la permission **Gérer les webhooks**.
+
+> Cette URL est un secret : elle suffit à poster dans le salon. Si elle fuite,
+> supprime le webhook et recrée-en un.
 
 ### 2. Obtenir la clé Gemini
 
@@ -59,7 +62,7 @@ Dépôt → **Settings** → **Secrets and variables** → **Actions** → **New
 | Secret | Obligatoire | Valeur |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | oui | la clé Google AI Studio |
-| `GOOGLE_CHAT_WEBHOOK_URL` | oui | l'URL du webhook entrant |
+| `DISCORD_WEBHOOK_URL` | oui | l'URL du webhook Discord |
 | `GEMINI_MODEL` | non | `gemini-2.5-flash` par défaut |
 
 ## Lancer un test
@@ -68,7 +71,7 @@ Dépôt → **Settings** → **Secrets and variables** → **Actions** → **New
 python main.py --dry-run                   # affiche le message, n'envoie rien
 python main.py --dry-run --since-hours 48  # fenêtre élargie si l'actu est calme
 python main.py --dry-run -v                # logs détaillés (sources, rejets)
-python main.py                             # envoi réel dans Google Chat
+python main.py                             # envoi réel dans Discord
 ```
 
 `--dry-run` ne modifie pas `sent.json` : le prochain envoi réel reste complet.
@@ -97,17 +100,19 @@ Les seuils se règlent dans `general` : `max_topics`, `min_importance`,
 
 ## Format du message
 
+Un **embed par domaine** (avec sa couleur), un **champ par sujet** :
+
 ```
 📡 Utrains Pulse — Veille du jeudi 27 novembre 2026
 
 ☸️ DevOps
 🆕 Kubernetes 1.35 est disponible
 Résumé en deux phrases.
-🔗 Source : Kubernetes Blog — 26/11/2026 Lire l'article
+🔗 Kubernetes Blog — 26/11/2026 · Lire l'article
 
 ☁️ Cloud | 🔐 DevSecOps | 🤖 LLMOps  (même format)
 
-12 articles analysés depuis 22 sources
+12 articles analysés depuis 23 sources
 ⚠️ Sources indisponibles : Jenkins Blog
 ```
 
@@ -115,14 +120,15 @@ Résumé en deux phrases.
 * Catégories : `🆕 Nouveauté`, `⚠️ Déprécié / Remplacé`, `🔐 Sécurité`, `💡 Nouvelle pratique`, `📈 Tendance`. Pour la fiabilité, Gemini renvoie une clé courte (`nouveaute`, `deprecie`, `securite`, `pratique`, `tendance`) et le code ajoute l'emoji.
 * En cas de dépréciation, une ligne `Remplacement : X → Y` est ajoutée.
 * Aucune actu importante → `Rien de majeur aujourd'hui ✅`.
-* Un message trop long pour Google Chat (limite 32 Ko) est découpé automatiquement en plusieurs messages.
+* Les limites Discord (10 embeds, 25 champs par embed, 6000 caractères par message) sont appliquées côté code : au-delà, le message est découpé automatiquement. Les marges se règlent dans la section `discord` de `config.yaml`.
 
 ## Fiabilité
 
 * Une source en panne n'interrompt pas la collecte : elle est listée en bas du message (`Sources indisponibles : …`).
-* Retry avec backoff exponentiel et jitter sur les flux, l'API Gemini et le webhook.
-* Échec complet du script → message d'erreur court dans l'espace Chat ; échec plus en amont (dépendances, checkout) → message envoyé par l'étape `failure()` du workflow.
+* Retry avec backoff exponentiel et jitter sur les flux, l'API Gemini et le webhook ; le rate limit Discord (`429`) est respecté via `retry_after`.
+* Échec complet du script → message d'erreur court dans le salon ; échec plus en amont (dépendances, checkout) → message envoyé par l'étape `failure()` du workflow.
 * Anti-doublon : `sent.json` conserve 30 jours d'URL déjà envoyées et la date de la dernière exécution ; le workflow le commite après chaque envoi. Si le job n'a pas tourné pendant plusieurs jours, la fenêtre de rattrapage est plafonnée à `max_lookback_hours`.
+* Aucune mention automatique : `allowed_mentions` est vidé, un titre d'article contenant `@here` ne ping personne.
 
 ## Horaire
 

@@ -1,7 +1,7 @@
 """Utrains Pulse — point d'entrée.
 
 Enchaînement : collecte des flux → analyse Gemini → sélection → message
-Google Chat. Un seul script, pas de base de données : l'état tient dans
+Discord. Un seul script, pas de base de données : l'état tient dans
 sent.json (anti-doublon + date de dernière exécution).
 
 Usage :
@@ -191,7 +191,7 @@ def run(args: argparse.Namespace) -> int:
         log.info("--dry-run : rien n'a été envoyé, sent.json inchangé")
         return 0
 
-    webhook = os.environ["GOOGLE_CHAT_WEBHOOK_URL"]
+    webhook = os.environ["DISCORD_WEBHOOK_URL"]
     notifier.send(webhook, payloads, config)
 
     # 5) Anti-doublon : on mémorise tout ce qui a été analysé.
@@ -208,7 +208,7 @@ def run(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="utrains-pulse",
-        description="Veille quotidienne DevOps / LLMOps vers Google Chat.",
+        description="Veille quotidienne DevOps / LLMOps vers Discord.",
     )
     parser.add_argument(
         "--dry-run",
@@ -236,9 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     if not os.environ.get("GEMINI_API_KEY"):
         log.error("GEMINI_API_KEY manquant (voir .env.example)")
         return 2
-    webhook = os.environ.get("GOOGLE_CHAT_WEBHOOK_URL")
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook and not args.dry_run:
-        log.error("GOOGLE_CHAT_WEBHOOK_URL manquant (voir .env.example)")
+        log.error("DISCORD_WEBHOOK_URL manquant (voir .env.example)")
         return 2
 
     started = datetime.now(timezone.utc)

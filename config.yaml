@@ -38,9 +38,13 @@ gemini:
   temperature: 0.2
   max_attempts: 4
 
-chat:
-  # Limite de taille d'une requête Google Chat (32 Ko) avec une marge.
-  max_payload_bytes: 28000
+discord:
+  # Nom affiché comme auteur des messages (surcharge le nom du webhook).
+  username: Utrains Pulse
+  # Limites Discord : 25 champs par embed, 10 embeds et 6000 caractères par
+  # message. On garde une marge, le reste part dans un message suivant.
+  max_fields_per_embed: 15
+  max_message_chars: 5500
   max_attempts: 4
 
 # Mots-clés du périmètre. Un article issu d'une source généraliste doit en

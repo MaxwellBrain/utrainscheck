@@ -103,7 +103,7 @@ def retry_call(
 ) -> T:
     """Exécute `func` avec un retry exponentiel et un jitter.
 
-    Utilisé pour les flux, l'API Gemini et le webhook Google Chat.
+    Utilisé pour les flux, l'API Gemini et le webhook Discord.
     """
     last_error: BaseException | None = None
     for attempt in range(1, attempts + 1):

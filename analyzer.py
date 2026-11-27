@@ -20,7 +20,7 @@ from collector import Article, retry_call
 
 log = logging.getLogger(__name__)
 
-#: Clés renvoyées par Gemini -> libellé affiché dans Google Chat.
+#: Clés renvoyées par Gemini -> libellé affiché dans Discord.
 #: On fait choisir une clé simple au modèle, puis le code met l'emoji :
 #: c'est plus fiable que de demander des emojis au modèle.
 CATEGORY_LABELS: dict[str, str] = {
@@ -31,7 +31,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "tendance": "📈 Tendance",
 }
 
-#: Emoji seul, utilisé devant le titre dans la carte Google Chat.
+#: Emoji seul, utilisé devant le titre dans la carte Discord.
 CATEGORY_EMOJI: dict[str, str] = {
     key: label.split(" ", 1)[0] for key, label in CATEGORY_LABELS.items()
 }

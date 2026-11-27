@@ -58,7 +58,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
         run: python main.py
 
@@ -79,17 +79,17 @@ jobs:
             git push
           }
 
-      - name: Signaler l'échec dans Google Chat
+      - name: Signaler l'échec dans Discord
         if: failure() && steps.gate.outputs.run == 'true'
         env:
-          WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$WEBHOOK" ] || exit 0
           python - <<'PY' > payload.json
           import json, os
           print(json.dumps({
-              "text": "🔴 *Utrains Pulse* — le job GitHub Actions a échoué.\n"
+              "content": "🔴 **Utrains Pulse** — le job GitHub Actions a échoué.\n"
                       f"Logs : {os.environ['RUN_URL']}"
           }, ensure_ascii=False))
           PY

@@ -1,13 +1,16 @@
-"""Construction et envoi du message Google Chat (carte cardsV2).
+"""Construction et envoi du message Discord (webhook entrant).
 
 Chaque sujet affiche obligatoirement : la source, sa date de publication et un
 lien cliquable vers l'article d'origine. La source officielle (l'éditeur de
 l'outil) est affichée en premier, les autres ensuite.
+
+Le message est une liste d'« embeds » : un embed par domaine, un champ par
+sujet. Les limites Discord (10 embeds, 25 champs, 6000 caractères par message)
+sont appliquées ici, avec découpage automatique en plusieurs messages.
 """
 
 from __future__ import annotations
 
-import html
 import json
 import logging
 import re
@@ -24,23 +27,30 @@ from collector import USER_AGENT, retry_call
 
 log = logging.getLogger(__name__)
 
-#: Emoji par domaine, dans l'ordre d'affichage défini par analyzer.DOMAINS.
+#: Emoji et couleur par domaine (barre verticale de l'embed Discord).
 DOMAIN_EMOJI: dict[str, str] = {
     "DevOps": "☸️",
     "Cloud": "☁️",
     "DevSecOps": "🔐",
     "LLMOps": "🤖",
 }
+DOMAIN_COLOR: dict[str, int] = {
+    "DevOps": 0x326CE5,  # bleu Kubernetes
+    "Cloud": 0xFF9900,  # orange AWS
+    "DevSecOps": 0xE53935,  # rouge
+    "LLMOps": 0x7C4DFF,  # violet
+}
 
-_WEEKDAYS = (
-    "lundi",
-    "mardi",
-    "mercredi",
-    "jeudi",
-    "vendredi",
-    "samedi",
-    "dimanche",
-)
+# Limites imposées par l'API Discord.
+MAX_EMBEDS_PER_MESSAGE = 10
+MAX_FIELDS_PER_EMBED = 25
+MAX_FIELD_NAME = 256
+MAX_FIELD_VALUE = 1024
+MAX_EMBED_FOOTER = 2048
+MAX_MESSAGE_CHARS = 6000
+MAX_CONTENT = 2000
+
+_WEEKDAYS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
 _MONTHS = (
     "janvier",
     "février",
@@ -56,12 +66,15 @@ _MONTHS = (
     "décembre",
 )
 
-CARD_TITLE = "📡 Utrains Pulse"
+BOT_NAME = "Utrains Pulse"
+
+#: Caractères qui déclencheraient du formatage Markdown involontaire.
+_MD_SPECIALS = re.compile(r"([*_~`|\\>])")
 
 
 @dataclass(slots=True)
 class RunStats:
-    """Chiffres affichés en bas de message."""
+    """Chiffres affichés en pied de message."""
 
     articles_analyzed: int
     sources_ok: int
@@ -96,55 +109,70 @@ def short_date(moment: datetime, tz: Any) -> str:
 
 
 def _esc(text: str) -> str:
-    """Échappe le texte avant insertion dans un textParagraph (qui accepte du HTML)."""
-    return html.escape(text, quote=False)
+    """Neutralise le Markdown Discord dans un texte venant d'une source externe."""
+    return _MD_SPECIALS.sub(r"\\\1", text)
 
 
-def _topic_widget(topic: Topic, tz: Any) -> dict[str, Any]:
-    """Un sujet = un paragraphe : catégorie + titre, résumé, puis ses sources."""
-    lines = [
-        f"<b>{topic.categorie_emoji} {_esc(topic.titre)}</b>",
-        _esc(topic.resume),
-    ]
+def _safe_link(url: str) -> str:
+    """Encode les parenthèses pour ne pas casser la syntaxe [texte](url)."""
+    return url.replace("(", "%28").replace(")", "%29")
+
+
+def _trim(text: str, limit: int) -> str:
+    """Tronque proprement à la limite Discord."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _topic_field(topic: Topic, tz: Any) -> dict[str, str]:
+    """Un sujet = un champ d'embed : titre, résumé, puis ses sources."""
+    name = _trim(f"{topic.categorie_emoji} {_esc(topic.titre)}", MAX_FIELD_NAME)
+
+    lines = [_esc(topic.resume)]
     if topic.remplacement:
-        lines.append(f"<b>Remplacement :</b> {_esc(topic.remplacement)}")
-
+        lines.append(f"**Remplacement :** {_esc(topic.remplacement)}")
     for article in topic.articles:
         lines.append(
-            f'🔗 Source : {_esc(article.source)} — {short_date(article.published, tz)} '
-            f'<a href="{html.escape(article.url, quote=True)}">Lire l\'article</a>'
+            f"🔗 {_esc(article.source)} — {short_date(article.published, tz)} · "
+            f"[Lire l'article]({_safe_link(article.url)})"
         )
-    return {"textParagraph": {"text": "<br>".join(lines)}}
+    return {"name": name, "value": _trim("\n".join(lines), MAX_FIELD_VALUE)}
 
 
 def _footer_text(stats: RunStats) -> str:
     """Pied de message : volumétrie et sources en panne."""
-    lines = [
-        f"<i>{stats.articles_analyzed} articles analysés depuis "
-        f"{stats.sources_ok} sources</i>"
-    ]
+    text = f"{stats.articles_analyzed} articles analysés depuis {stats.sources_ok} sources"
     if stats.failed_sources:
-        sources = ", ".join(_esc(name) for name in stats.failed_sources)
-        lines.append(f"<i>⚠️ Sources indisponibles : {sources}</i>")
-    return "<br>".join(lines)
+        text += "\n⚠️ Sources indisponibles : " + ", ".join(stats.failed_sources)
+    return _trim(text, MAX_EMBED_FOOTER)
 
 
-def _card(subtitle: str, sections: list[dict[str, Any]], index: int) -> dict[str, Any]:
+def _embed_chars(embed: dict[str, Any]) -> int:
+    """Nombre de caractères comptés par Discord dans le quota de 6000."""
+    total = len(embed.get("title", "")) + len(embed.get("description", ""))
+    total += len(embed.get("footer", {}).get("text", ""))
+    for field in embed.get("fields", []):
+        total += len(field["name"]) + len(field["value"])
+    return total
+
+
+def _new_embed(domain: str, suffix: str = "") -> dict[str, Any]:
     return {
-        "cardsV2": [
-            {
-                "cardId": f"utrains-pulse-{index}",
-                "card": {
-                    "header": {"title": CARD_TITLE, "subtitle": subtitle},
-                    "sections": sections,
-                },
-            }
-        ]
+        "title": f"{DOMAIN_EMOJI.get(domain, '•')} {domain}{suffix}",
+        "color": DOMAIN_COLOR.get(domain, 0x5865F2),
+        "fields": [],
     }
 
 
-def _payload_size(payload: dict[str, Any]) -> int:
-    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+def _message(content: str, embeds: list[dict[str, Any]], username: str) -> dict[str, Any]:
+    return {
+        "username": username,
+        "content": _trim(content, MAX_CONTENT),
+        "embeds": embeds,
+        # Aucune mention automatique : un titre contenant @here ne ping personne.
+        "allowed_mentions": {"parse": []},
+    }
 
 
 def build_payloads(
@@ -153,74 +181,78 @@ def build_payloads(
     config: dict[str, Any],
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Construit un ou plusieurs payloads Google Chat (découpage si trop gros)."""
+    """Construit un ou plusieurs messages Discord (découpage si trop gros)."""
     general = config["general"]
+    discord_config = config.get("discord", {})
+    username = str(discord_config.get("username", BOT_NAME))
+    max_fields = min(int(discord_config.get("max_fields_per_embed", 15)), MAX_FIELDS_PER_EMBED)
+    max_chars = min(int(discord_config.get("max_message_chars", 5500)), MAX_MESSAGE_CHARS)
+
     tz = get_timezone(str(general.get("timezone", "UTC")))
     moment = (now or datetime.now(timezone.utc)).astimezone(tz)
-    subtitle = f"Veille du {french_long_date(moment)}"
-    max_bytes = int(config["chat"].get("max_payload_bytes", 28000))
-
-    footer_section = {"widgets": [{"textParagraph": {"text": _footer_text(stats)}}]}
+    header = f"📡 **{username}** — Veille du {french_long_date(moment)}"
+    footer = {"text": _footer_text(stats)}
+    timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
 
     if not topics:
-        sections = [
-            {"widgets": [{"textParagraph": {"text": "Rien de majeur aujourd'hui ✅"}}]},
-            footer_section,
-        ]
-        return [_card(subtitle, sections, 1)]
+        embed = {
+            "title": "Rien de majeur aujourd'hui ✅",
+            "color": 0x9E9E9E,
+            "footer": footer,
+            "timestamp": timestamp,
+        }
+        return [_message(header, [embed], username)]
 
-    # Sujets regroupés par domaine, dans l'ordre d'affichage.
-    grouped: list[tuple[str, list[Topic]]] = []
+    # 1) Un embed par domaine, découpé si trop de sujets ou trop de caractères.
+    embeds: list[dict[str, Any]] = []
     for domain in DOMAINS:
-        in_domain = [topic for topic in topics if topic.domaine == domain]
-        if in_domain:
-            grouped.append((domain, in_domain))
-
-    # Découpage : on ajoute les sujets un par un et on ouvre un nouveau message
-    # dès que la limite de taille de Google Chat serait dépassée.
-    payloads: list[dict[str, Any]] = []
-    sections: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-
-    def flush() -> None:
-        nonlocal sections, current
-        if sections:
-            index = len(payloads) + 1
-            suffix = "" if index == 1 else f" (suite {index})"
-            payloads.append(_card(subtitle + suffix, sections, index))
-        sections = []
-        current = None
-
-    def widget_count() -> int:
-        return sum(len(section["widgets"]) for section in sections)
-
-    for domain, domain_topics in grouped:
-        header = f"{DOMAIN_EMOJI.get(domain, '•')} {domain}"
-        current = {"header": header, "widgets": []}
-        sections.append(current)
+        domain_topics = [topic for topic in topics if topic.domaine == domain]
+        if not domain_topics:
+            continue
+        current = _new_embed(domain)
         for topic in domain_topics:
-            widget = _topic_widget(topic, tz)
-            current["widgets"].append(widget)
-            candidate = _card(subtitle, sections, len(payloads) + 1)
-            if _payload_size(candidate) > max_bytes and widget_count() > 1:
-                # Le sujet ne rentre pas : on le reporte au message suivant.
-                current["widgets"].pop()
-                if not current["widgets"]:
-                    sections.pop()
-                flush()
-                current = {"header": header, "widgets": [widget]}
-                sections.append(current)
+            field = _topic_field(topic, tz)
+            too_many = len(current["fields"]) >= max_fields
+            too_long = (
+                _embed_chars(current) + len(field["name"]) + len(field["value"]) > max_chars
+            )
+            if current["fields"] and (too_many or too_long):
+                embeds.append(current)
+                current = _new_embed(domain, suffix=" (suite)")
+            current["fields"].append(field)
+        embeds.append(current)
 
-    flush()
+    # 2) Regroupement des embeds en messages (10 embeds et 6000 caractères max).
+    payloads: list[dict[str, Any]] = []
+    batch: list[dict[str, Any]] = []
+    batch_chars = 0
+    for embed in embeds:
+        size = _embed_chars(embed)
+        if batch and (len(batch) >= MAX_EMBEDS_PER_MESSAGE or batch_chars + size > max_chars):
+            suffix = "" if not payloads else f" (suite {len(payloads) + 1})"
+            payloads.append(_message(header + suffix, batch, username))
+            batch, batch_chars = [], 0
+        batch.append(embed)
+        batch_chars += size
+    suffix = "" if not payloads else f" (suite {len(payloads) + 1})"
+    payloads.append(_message(header + suffix, batch, username))
 
-    # Pied de message : dans le dernier message s'il y a la place, sinon seul.
+    # 3) Pied de message sur le dernier embed, ou seul s'il ne rentre pas.
     last = payloads[-1]
-    last["cardsV2"][0]["card"]["sections"].append(footer_section)
-    if _payload_size(last) > max_bytes:
-        last["cardsV2"][0]["card"]["sections"].pop()
-        payloads.append(_card(subtitle + " (suite)", [footer_section], len(payloads) + 1))
+    total = sum(_embed_chars(embed) for embed in last["embeds"])
+    if total + len(footer["text"]) <= max_chars:
+        last["embeds"][-1]["footer"] = footer
+        last["embeds"][-1]["timestamp"] = timestamp
+    else:
+        payloads.append(
+            _message(
+                header + f" (suite {len(payloads) + 1})",
+                [{"color": 0x9E9E9E, "footer": footer, "timestamp": timestamp}],
+                username,
+            )
+        )
 
-    log.info("Message construit : %d partie(s)", len(payloads))
+    log.info("Message construit : %d partie(s), %d embed(s)", len(payloads), len(embeds))
     return payloads
 
 
@@ -229,30 +261,32 @@ def build_payloads(
 # ---------------------------------------------------------------------------
 
 
+def _unescape_md(text: str) -> str:
+    """Retire les échappements Markdown pour l'affichage terminal."""
+    return re.sub(r"\\([*_~`|\\>])", r"\1", text)
+
+
 def payloads_to_text(payloads: Sequence[dict[str, Any]]) -> str:
-    """Rendu lisible des payloads, pour vérifier sans rien envoyer."""
+    """Rendu lisible des messages, pour vérifier sans rien envoyer."""
     out: list[str] = []
     for position, payload in enumerate(payloads, start=1):
-        if "text" in payload:
-            out.append(payload["text"])
-            continue
-        card = payload["cardsV2"][0]["card"]
-        header = card.get("header", {})
+        size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        chars = sum(_embed_chars(embed) for embed in payload.get("embeds", []))
         out.append(
             f"===== message {position}/{len(payloads)} "
-            f"({_payload_size(payload)} octets) =====\n"
-            f"{header.get('title', '')} — {header.get('subtitle', '')}"
+            f"({chars} caractères comptés par Discord, {size} octets) ====="
         )
-        for section in card.get("sections", []):
-            if section.get("header"):
-                out.append(f"\n{section['header']}")
-            for widget in section.get("widgets", []):
-                text = widget.get("textParagraph", {}).get("text", "")
-                text = text.replace("<br>", "\n")
-                # <a href="URL">Libellé</a>  ->  Libellé (URL)
-                text = re.sub(r'<a href="([^"]+)">(.*?)</a>', r"\2 (\1)", text)
-                text = re.sub(r"</?[a-zA-Z][^>]*>", "", text)
-                out.append(html.unescape(text))
+        out.append(payload["content"].replace("**", ""))
+        for embed in payload.get("embeds", []):
+            if embed.get("title"):
+                out.append(f"\n{embed['title']}")
+            for field in embed.get("fields", []):
+                out.append(_unescape_md(field["name"]))
+                value = field["value"].replace("**", "")
+                value = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", value)
+                out.append(_unescape_md(value))
+            if embed.get("footer"):
+                out.append(f"\n{embed['footer']['text']}")
         out.append("")
     return "\n".join(out)
 
@@ -262,12 +296,12 @@ def payloads_to_text(payloads: Sequence[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-class PermanentChatError(RuntimeError):
-    """Erreur non récupérable côté Google Chat (payload ou URL en cause)."""
+class PermanentWebhookError(RuntimeError):
+    """Erreur non récupérable côté Discord (payload ou URL en cause)."""
 
 
 def _post(webhook_url: str, payload: dict[str, Any], timeout: int, attempts: int) -> None:
-    """POST du payload avec retry/backoff. Lève si l'envoi échoue définitivement."""
+    """POST du message avec retry/backoff et respect du rate limit Discord."""
 
     def _do() -> None:
         response = requests.post(
@@ -276,12 +310,18 @@ def _post(webhook_url: str, payload: dict[str, Any], timeout: int, attempts: int
             timeout=timeout,
             headers={"User-Agent": USER_AGENT},
         )
-        # 4xx hors 429 : inutile de réessayer, le payload ou l'URL est en cause.
-        if response.status_code >= 400 and not (
-            response.status_code == 429 or response.status_code >= 500
-        ):
-            raise PermanentChatError(
-                f"Google Chat a refusé le message ({response.status_code}) : "
+        if response.status_code == 429:
+            # Discord indique le délai à respecter (en secondes).
+            try:
+                wait = float(response.json().get("retry_after", 2))
+            except (ValueError, AttributeError):
+                wait = 2.0
+            log.warning("Discord : rate limit, pause de %.1fs", wait)
+            time.sleep(min(wait, 30.0))
+            raise requests.HTTPError("429 rate limit", response=response)
+        if 400 <= response.status_code < 500:
+            raise PermanentWebhookError(
+                f"Discord a refusé le message ({response.status_code}) : "
                 f"{response.text[:300]}"
             )
         response.raise_for_status()
@@ -292,7 +332,7 @@ def _post(webhook_url: str, payload: dict[str, Any], timeout: int, attempts: int
         base_delay=2.0,
         max_delay=30.0,
         exceptions=(requests.RequestException,),
-        label="webhook Google Chat",
+        label="webhook Discord",
     )
 
 
@@ -303,7 +343,7 @@ def send(
 ) -> None:
     """Envoie les messages dans l'ordre, avec une courte pause entre chacun."""
     timeout = int(config["general"].get("http_timeout", 20))
-    attempts = int(config["chat"].get("max_attempts", 4))
+    attempts = int(config.get("discord", {}).get("max_attempts", 4))
     for position, payload in enumerate(payloads, start=1):
         _post(webhook_url, payload, timeout, attempts)
         log.info("Message %d/%d envoyé", position, len(payloads))
@@ -312,8 +352,12 @@ def send(
 
 
 def send_error(webhook_url: str, message: str, timeout: int = 15) -> None:
-    """Envoie un message d'erreur court (texte simple, un seul essai + 1 retry)."""
-    payload = {"text": f"🔴 *Utrains Pulse* — échec de la veille\n{message}"[:3500]}
+    """Envoie un message d'erreur court (deux essais maximum)."""
+    payload = {
+        "username": BOT_NAME,
+        "content": _trim(f"🔴 **{BOT_NAME}** — échec de la veille\n```{message}```", MAX_CONTENT),
+        "allowed_mentions": {"parse": []},
+    }
     try:
         retry_call(
             lambda: requests.post(
