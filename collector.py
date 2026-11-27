@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, TypeVar
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import feedparser
 import requests
@@ -46,6 +46,18 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
 _WS_RE = re.compile(r"\s+")
 
+# Illustrations : première <img> du contenu, puis balises <meta> de la page.
+_IMG_SRC_RE = re.compile(r"""<img[^>]+src=["']([^"']+)["']""", re.IGNORECASE)
+_META_RE = re.compile(r"<meta\s[^>]*>", re.IGNORECASE)
+_META_ATTR_RE = re.compile(r"""([a-zA-Z:_-]+)\s*=\s*["']([^"']*)["']""")
+_META_IMAGE_KEYS = {"og:image", "og:image:url", "og:image:secure_url", "twitter:image",
+                    "twitter:image:src"}
+#: Motifs d'URL à ignorer : pixels de suivi, séparateurs, formats mal rendus.
+#: avatars.githubusercontent : vignettes 60 px des notes de version, trop petites —
+#: on préfère laisser la balise Open Graph de la page fournir une vraie illustration.
+_IMAGE_NOISE = ("feedburner", "doubleclick", "/pixel", "pixel.", "spacer", "/1x1", "1x1.",
+                "blank.gif", ".svg", "avatars.githubusercontent.com")
+
 
 # ---------------------------------------------------------------------------
 # Modèle de données
@@ -64,6 +76,7 @@ class Article:
     published: datetime  # toujours timezone-aware, en UTC
     content: str
     official_for: tuple[str, ...] = ()
+    image: str | None = None  # illustration de l'article, si on en trouve une
 
     def is_official_for(self, text: str) -> bool:
         """True si cette source est l'éditeur officiel de l'outil cité dans `text`."""
@@ -234,6 +247,111 @@ def _entry_content(entry: Any) -> str:
     return ""
 
 
+def _entry_image(entry: Any, base_url: str) -> str | None:
+    """Illustration fournie par le flux : media:content, enclosure, ou <img>."""
+    candidates: list[str] = []
+
+    for media in entry.get("media_content") or []:
+        if isinstance(media, dict) and str(media.get("medium", "image")) == "image":
+            candidates.append(str(media.get("url") or ""))
+    for thumb in entry.get("media_thumbnail") or []:
+        if isinstance(thumb, dict):
+            candidates.append(str(thumb.get("url") or ""))
+    for link in entry.get("links") or []:
+        if isinstance(link, dict) and str(link.get("type", "")).startswith("image/"):
+            candidates.append(str(link.get("href") or ""))
+
+    match = _IMG_SRC_RE.search(_entry_content(entry))
+    if match:
+        candidates.append(match.group(1))
+
+    for candidate in candidates:
+        cleaned = _clean_image_url(candidate, base_url)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _clean_image_url(url: str, base_url: str) -> str | None:
+    """Absolutise l'URL et écarte les pixels de tracking et formats inutilisables."""
+    url = html.unescape((url or "").strip())
+    if not url:
+        return None
+    url = urljoin(base_url, url)
+    if not url.startswith(("http://", "https://")):
+        return None
+    lowered = url.lower()
+    if any(noise in lowered for noise in _IMAGE_NOISE):
+        return None
+    return url
+
+
+def _og_image(session: requests.Session, article_url: str, timeout: int) -> str | None:
+    """Image Open Graph de la page, quand le flux n'en fournit pas."""
+    try:
+        response = session.get(article_url, timeout=timeout)
+        if response.status_code != 200:
+            return None
+        head = response.text[:300_000]
+    except requests.RequestException as exc:
+        log.debug("Page illisible pour l'image (%s) : %s", article_url, exc)
+        return None
+
+    for tag in _META_RE.finditer(head):
+        attributes = {
+            key.lower(): value for key, value in _META_ATTR_RE.findall(tag.group(0))
+        }
+        marker = (attributes.get("property") or attributes.get("name") or "").lower()
+        if marker in _META_IMAGE_KEYS and attributes.get("content"):
+            cleaned = _clean_image_url(attributes["content"], article_url)
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _image_is_usable(session: requests.Session, url: str, timeout: int) -> bool:
+    """Vérifie que l'URL renvoie bien une image (Discord n'affiche rien sinon)."""
+    try:
+        response = session.head(url, timeout=timeout, allow_redirects=True)
+        if response.status_code != 200:
+            return False
+        return response.headers.get("Content-Type", "").lower().startswith("image/")
+    except requests.RequestException:
+        return False
+
+
+def fetch_missing_images(articles: Sequence[Article], config: dict[str, Any]) -> int:
+    """Complète l'illustration des articles donnés (appelé sur les sujets publiés).
+
+    Le flux reste prioritaire ; sinon on lit la balise Open Graph de la page.
+    Chaque image retenue est vérifiée (HTTP 200 et type image/*).
+    """
+    general = config["general"]
+    if not general.get("fetch_images", True) or not articles:
+        return 0
+
+    timeout = int(general.get("http_timeout", 20))
+    workers = max(1, int(general.get("url_check_workers", 12)))
+    session = _new_session()
+
+    def _resolve(article: Article) -> None:
+        url = article.image
+        if url and _image_is_usable(session, url, timeout):
+            return
+        article.image = None
+        found = _og_image(session, article.url, timeout)
+        if found and _image_is_usable(session, found, timeout):
+            article.image = found
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(_resolve, articles))
+    session.close()
+
+    found = sum(1 for article in articles if article.image)
+    log.info("Illustrations : %d / %d articles", found, len(articles))
+    return found
+
+
 def _fetch_feed(session: requests.Session, url: str, timeout: int, attempts: int) -> list[Any]:
     """Télécharge et parse un flux. Lève une exception si le flux est inutilisable."""
 
@@ -372,6 +490,7 @@ def collect(
                     published=published,
                     content=content or title,
                     official_for=official_for,
+                    image=_entry_image(entry, link),
                 )
             )
 

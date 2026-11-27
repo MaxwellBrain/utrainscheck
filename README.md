@@ -5,7 +5,7 @@ Chaque jour à **8h00 (America/Chicago)**, GitHub Actions lance un script Python
 
 1. collecte les actualités des dernières 24 h depuis des **flux officiels** (RSS/Atom),
 2. les fait trier, regrouper et résumer en français par l'**API Gemini**,
-3. publie un récapitulatif dans un **salon Discord** via un webhook.
+3. publie un message par sujet dans un **salon Discord** via un webhook, illustré quand une image est disponible.
 
 Pas d'interface web, pas de base de données.
 
@@ -22,7 +22,7 @@ Pas d'interface web, pas de base de données.
 main.py                         orchestration, état (sent.json), CLI
 collector.py                    collecte des flux, nettoyage, vérification des URL
 analyzer.py                     appel Gemini (JSON strict) + sélection des sujets
-notifier.py                     construction et envoi du message Discord
+notifier.py                     construction et envoi des messages Discord
 config.yaml                     sources, mots-clés, seuils (modifiable sans toucher au code)
 requirements.txt
 .env.example
@@ -100,27 +100,41 @@ Les seuils se règlent dans `general` : `max_topics`, `min_importance`,
 
 ## Format du message
 
-Un **embed par domaine** (avec sa couleur), un **champ par sujet** :
+**Un message Discord par sujet**, façon fil d'actualité illustré : s'il y a de
+l'actualité sur Terraform, Ansible, Docker et AWS, cela fait quatre messages
+distincts, pas un seul bloc.
+
+Chaque message est un embed :
 
 ```
-📡 Utrains Pulse — Veille du jeudi 27 novembre 2026
-
-☸️ DevOps
-🆕 Kubernetes 1.35 est disponible
+☸️ DevOps                                  ← domaine (couleur de la barre)
+🆕 Kubernetes 1.35 est disponible          ← titre cliquable vers l'article
 Résumé en deux phrases.
+
 🔗 Kubernetes Blog — 26/11/2026 · Lire l'article
-
-☁️ Cloud | 🔐 DevSecOps | 🤖 LLMOps  (même format)
-
-12 articles analysés depuis 23 sources
-⚠️ Sources indisponibles : Jenkins Blog
+🔗 CNCF Blog — 26/11/2026 · Lire l'article
+[ photo de l'article ]
+Kubernetes Blog · importance 5/5
 ```
 
-* 8 à 10 sujets maximum, importance ≥ 3, triés par importance, avec au moins un sujet LLMOps si l'actualité en propose.
+Un message d'en-tête ouvre la série :
+`📡 Utrains Pulse — Veille du jeudi 27 novembre 2026 · 8 sujets · 23 articles
+analysés depuis 23 sources`.
+
+* 8 à 10 sujets maximum, importance ≥ 3, triés par domaine (DevOps, Cloud, DevSecOps, LLMOps) puis par importance, avec au moins un sujet LLMOps si l'actualité en propose.
+* **Illustration** : image fournie par le flux, sinon balise Open Graph de la page de l'article. Chaque image est vérifiée (HTTP 200 et type `image/*`) avant envoi ; sans image valide, le message s'affiche simplement sans photo.
 * Catégories : `🆕 Nouveauté`, `⚠️ Déprécié / Remplacé`, `🔐 Sécurité`, `💡 Nouvelle pratique`, `📈 Tendance`. Pour la fiabilité, Gemini renvoie une clé courte (`nouveaute`, `deprecie`, `securite`, `pratique`, `tendance`) et le code ajoute l'emoji.
 * En cas de dépréciation, une ligne `Remplacement : X → Y` est ajoutée.
 * Aucune actu importante → `Rien de majeur aujourd'hui ✅`.
-* Les limites Discord (10 embeds, 25 champs par embed, 6000 caractères par message) sont appliquées côté code : au-delà, le message est découpé automatiquement. Les marges se règlent dans la section `discord` de `config.yaml`.
+
+Réglages dans la section `discord` de `config.yaml` :
+
+| Clé | Effet |
+| --- | --- |
+| `message_per_topic` | `true` (défaut) : un message par sujet. `false` : un seul message groupé par domaine, découpé si trop long. |
+| `send_header` | message d'en-tête avec la date et la volumétrie |
+| `image_style` | `large` (photo sous le texte), `thumbnail` (vignette), `none` |
+| `username` | nom affiché comme auteur des messages |
 
 ## Fiabilité
 

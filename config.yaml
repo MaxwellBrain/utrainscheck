@@ -29,6 +29,9 @@ general:
   url_check_workers: 12
   # Vérification que chaque URL répond bien 200 (HEAD puis GET).
   verify_urls: true
+  # Illustration des sujets publiés : image du flux, sinon balise Open Graph
+  # de la page. Chaque image est vérifiée avant d'être envoyée à Discord.
+  fetch_images: true
   # Filtrage par mots-clés appliqué par défaut aux sources généralistes.
   filter_keywords_by_default: true
 
@@ -56,6 +59,14 @@ gemini:
 discord:
   # Nom affiché comme auteur des messages (surcharge le nom du webhook).
   username: Utrains Pulse
+  # true  : un message par sujet, façon fil d'actualité illustré
+  #         (Terraform, Ansible, Docker, AWS → 4 messages distincts)
+  # false : un seul message, les sujets regroupés par domaine
+  message_per_topic: true
+  # Message d'en-tête (date + volumétrie) avant les sujets.
+  send_header: true
+  # Illustration : large (photo sous le texte) | thumbnail (vignette) | none
+  image_style: large
   # Limites Discord : 25 champs par embed, 10 embeds et 6000 caractères par
   # message. On garde une marge, le reste part dans un message suivant.
   max_fields_per_embed: 15

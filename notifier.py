@@ -46,6 +46,8 @@ MAX_EMBEDS_PER_MESSAGE = 10
 MAX_FIELDS_PER_EMBED = 25
 MAX_FIELD_NAME = 256
 MAX_FIELD_VALUE = 1024
+MAX_EMBED_TITLE = 256
+MAX_EMBED_DESCRIPTION = 4096
 MAX_EMBED_FOOTER = 2048
 MAX_MESSAGE_CHARS = 6000
 MAX_CONTENT = 2000
@@ -175,13 +177,56 @@ def _message(content: str, embeds: list[dict[str, Any]], username: str) -> dict[
     }
 
 
+def _topic_message(
+    topic: Topic,
+    tz: Any,
+    username: str,
+    image_style: str,
+) -> dict[str, Any]:
+    """Un sujet = un message à part entière, façon article illustré."""
+    main = topic.articles[0]
+
+    lines = [_esc(topic.resume)]
+    if topic.remplacement:
+        lines.append(f"**Remplacement :** {_esc(topic.remplacement)}")
+    lines.append("")
+    for article in topic.articles:
+        lines.append(
+            f"🔗 **{_esc(article.source)}** — {short_date(article.published, tz)} · "
+            f"[Lire l'article]({_safe_link(article.url)})"
+        )
+
+    embed: dict[str, Any] = {
+        "author": {"name": f"{DOMAIN_EMOJI.get(topic.domaine, '•')} {topic.domaine}"},
+        "title": _trim(f"{topic.categorie_emoji} {_esc(topic.titre)}", MAX_EMBED_TITLE),
+        "url": _safe_link(main.url),  # le titre devient cliquable
+        "description": _trim("\n".join(lines), MAX_EMBED_DESCRIPTION),
+        "color": DOMAIN_COLOR.get(topic.domaine, 0x5865F2),
+        "footer": {"text": f"{main.source} · importance {topic.importance}/5"},
+        "timestamp": main.published.astimezone(timezone.utc).isoformat(),
+    }
+
+    # Illustration : la première disponible parmi les articles du sujet.
+    image = next((article.image for article in topic.articles if article.image), None)
+    if image and image_style in ("large", "thumbnail"):
+        key = "image" if image_style == "large" else "thumbnail"
+        embed[key] = {"url": image}
+
+    return _message("", [embed], username)
+
+
 def build_payloads(
     topics: Sequence[Topic],
     stats: RunStats,
     config: dict[str, Any],
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Construit un ou plusieurs messages Discord (découpage si trop gros)."""
+    """Construit les messages Discord du jour.
+
+    Par défaut, un message par sujet (façon fil d'actualité illustré). Avec
+    `discord.message_per_topic: false`, on retombe sur un message unique
+    regroupé par domaine.
+    """
     general = config["general"]
     discord_config = config.get("discord", {})
     username = str(discord_config.get("username", BOT_NAME))
@@ -203,7 +248,33 @@ def build_payloads(
         }
         return [_message(header, [embed], username)]
 
-    # 1) Un embed par domaine, découpé si trop de sujets ou trop de caractères.
+    if discord_config.get("message_per_topic", True):
+        # Les sujets sont regroupés par domaine pour garder un ordre de lecture.
+        ordered = sorted(
+            topics,
+            key=lambda topic: (
+                DOMAINS.index(topic.domaine) if topic.domaine in DOMAINS else len(DOMAINS),
+                -topic.importance,
+            ),
+        )
+        image_style = str(discord_config.get("image_style", "large"))
+        payloads = []
+        if discord_config.get("send_header", True):
+            sujets = f"{len(ordered)} sujet" + ("s" if len(ordered) > 1 else "")
+            content = (
+                f"{header}\n*{sujets} · {stats.articles_analyzed} articles analysés "
+                f"depuis {stats.sources_ok} sources*"
+            )
+            if stats.failed_sources:
+                content += "\n⚠️ Sources indisponibles : " + ", ".join(stats.failed_sources)
+            payloads.append(_message(content, [], username))
+        payloads += [_topic_message(topic, tz, username, image_style) for topic in ordered]
+        if not discord_config.get("send_header", True):
+            payloads[-1]["embeds"][-1]["footer"] = footer
+        log.info("Message construit : %d message(s), un par sujet", len(payloads))
+        return payloads
+
+    # Mode groupé : un embed par domaine, découpé si trop de sujets ou trop long.
     embeds: list[dict[str, Any]] = []
     for domain in DOMAINS:
         domain_topics = [topic for topic in topics if topic.domaine == domain]
@@ -276,10 +347,20 @@ def payloads_to_text(payloads: Sequence[dict[str, Any]]) -> str:
             f"===== message {position}/{len(payloads)} "
             f"({chars} caractères comptés par Discord, {size} octets) ====="
         )
-        out.append(payload["content"].replace("**", ""))
+        if payload["content"]:
+            out.append(_unescape_md(payload["content"].replace("**", "")))
         for embed in payload.get("embeds", []):
+            if embed.get("author"):
+                out.append(f"\n{embed['author']['name']}")
             if embed.get("title"):
-                out.append(f"\n{embed['title']}")
+                out.append(_unescape_md(embed["title"]))
+            if embed.get("description"):
+                description = embed["description"].replace("**", "")
+                description = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", description)
+                out.append(_unescape_md(description))
+            for key in ("image", "thumbnail"):
+                if embed.get(key):
+                    out.append(f"🖼️  {key} : {embed[key]['url']}")
             for field in embed.get("fields", []):
                 out.append(_unescape_md(field["name"]))
                 value = field["value"].replace("**", "")

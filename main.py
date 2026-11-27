@@ -23,7 +23,7 @@ from typing import Any
 
 import notifier
 from analyzer import analyze, resolve_models, select_topics
-from collector import collect, load_config, normalize_url
+from collector import collect, fetch_missing_images, load_config, normalize_url
 
 log = logging.getLogger("utrains_pulse")
 
@@ -177,7 +177,13 @@ def run(args: argparse.Namespace) -> int:
             topic.titre,
         )
 
-    # 4) Message
+    # 4) Illustrations : uniquement pour les articles réellement publiés.
+    if selected:
+        fetch_missing_images(
+            [article for topic in selected for article in topic.articles], config
+        )
+
+    # 5) Message
     stats = notifier.RunStats(
         articles_analyzed=len(collected.articles),
         sources_ok=collected.sources_ok,
@@ -194,7 +200,7 @@ def run(args: argparse.Namespace) -> int:
     webhook = os.environ["DISCORD_WEBHOOK_URL"]
     notifier.send(webhook, payloads, config)
 
-    # 5) Anti-doublon : on mémorise tout ce qui a été analysé.
+    # 6) Anti-doublon : on mémorise tout ce qui a été analysé.
     save_state(
         state_path,
         state,
