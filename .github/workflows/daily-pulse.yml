@@ -8,6 +8,15 @@ on:
     - cron: '0 13 * * *'
     - cron: '0 14 * * *'
   workflow_dispatch:
+    inputs:
+      since_hours:
+        description: "Fenêtre de collecte, en heures (vide = depuis la dernière exécution)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Afficher le message dans les logs sans l'envoyer"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # nécessaire pour commiter sent.json (anti-doublon)
@@ -60,7 +69,18 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-        run: python main.py
+          SINCE_HOURS: ${{ inputs.since_hours }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          ARGS=""
+          if [ -n "$SINCE_HOURS" ]; then
+            ARGS="$ARGS --since-hours $SINCE_HOURS"
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          echo "python main.py $ARGS"
+          python main.py $ARGS
 
       - name: Mémoriser les articles envoyés (sent.json)
         if: steps.gate.outputs.run == 'true'
