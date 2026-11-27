@@ -1,8 +1,31 @@
 {
-  "last_run": "2026-11-27T10:52:23.614845+00:00",
+  "last_run": "2026-11-27T10:53:20.490179+00:00",
   "urls": {
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-cloudwatch-omni-pagerduty": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-ec2-c9g-instances-additional-regions": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-ec2-c9gd-instances-additional-regions": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-ec2-m8g-instances-telaviv-region": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-ec2-m9g-instances-additional-regions": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-ec2-m9gd-asiapacific-seoul": "2026-11-27",
     "https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-rds-postgresql-18-7-17-12-16-16-15-20-14-25": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/elastic-load-balancing-for-envoy-generally-available": "2026-11-27",
+    "https://aws.amazon.com/about-aws/whats-new/2026/11/lambda-durable-microvm": "2026-11-27",
+    "https://azure.microsoft.com/updates?id=568586": "2026-11-27",
+    "https://azure.microsoft.com/updates?id=582326": "2026-11-27",
+    "https://docs.cloud.google.com/release-notes": "2026-11-27",
+    "https://github.blog/changelog/2026-11-25-copilot-code-review-billing-will-default-to-the-organization": "2026-11-27",
+    "https://github.com/kubernetes/kubernetes/releases/tag/v1.35.11": "2026-11-27",
+    "https://github.com/kubernetes/kubernetes/releases/tag/v1.36.7": "2026-11-27",
+    "https://github.com/kubernetes/kubernetes/releases/tag/v1.37.3": "2026-11-27",
+    "https://github.com/langchain-ai/langchain/releases/tag/langchain-anthropic%3D%3D1.7.13": "2026-11-27",
+    "https://github.com/langchain-ai/langchain/releases/tag/langchain-core%3D%3D1.8.5": "2026-11-27",
+    "https://github.com/langchain-ai/langgraph/releases/tag/cli%3D%3D0.4.44": "2026-11-27",
     "https://github.com/mlflow/mlflow/releases/tag/model-catalog%2Flatest": "2026-11-27",
-    "https://github.com/ollama/ollama/releases/tag/v0.40.19-rc0": "2026-11-27"
+    "https://github.com/ollama/ollama/releases/tag/v0.40.19-rc0": "2026-11-27",
+    "https://huggingface.co/blog/nvidia/building-on-nemotron-35-parse-open-data-fine-tunin": "2026-11-27",
+    "https://www.cisa.gov/news-events/alerts/2026/11/25/cisa-adds-10-known-exploited-vulnerabilities-catalog": "2026-11-27",
+    "https://www.cncf.io/blog/2026/11/25/%f0%9f%9a%80-the-story-behind-drone-2-my-kubecon-cloudnativecon-north-america-2026-keynote": "2026-11-27",
+    "https://www.docker.com/blog/prove-your-ai-agent-guardrails-work": "2026-11-27",
+    "https://www.langchain.com/blog/the-agent-lake": "2026-11-27"
   }
 }
